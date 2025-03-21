@@ -414,13 +414,19 @@ int Optimizer::PoseOptimization(Frame *pFrame)
 
             const size_t idx = vnIndexEdgeStereo[i];
 
+            // 如果在此前的优化中被判定为outlier，
+            // 则重新计算error(再给一次机会)，
+            // 重新计算error后，再次判断是否为outlier
             if(pFrame->mvbOutlier[idx])
             {
                 e->computeError();
             }
 
+            // 计算chi2，也就是: error的转置*信息矩阵*error
             const float chi2 = e->chi2();
 
+            // 如果chi2大于阈值，那么认为是outlier，并且设置level为1，
+            // 即在下一次优化中，不再考虑这个观测
             if(chi2>chi2Stereo[it])
             {
                 pFrame->mvbOutlier[idx]=true;
@@ -433,6 +439,9 @@ int Optimizer::PoseOptimization(Frame *pFrame)
                 pFrame->mvbOutlier[idx]=false;
             }
 
+            // 从第三次优化开始，不再使用robust kernel，
+            // 经过前两次优化，outlier的误差已经被降低了，
+            // 所以不再使用robust kernel
             if(it==2)
                 e->setRobustKernel(0);
         }

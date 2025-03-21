@@ -215,7 +215,9 @@ protected:
 
     // Spanning Tree and Loop Edges
     bool mbFirstConnection;
+    // 当前关键帧在最小生成树中的父节点
     KeyFrame* mpParent;
+    // 当前关键帧的子节点
     std::set<KeyFrame*> mspChildrens;
     std::set<KeyFrame*> mspLoopEdges;
 

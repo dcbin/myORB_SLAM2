@@ -285,6 +285,7 @@ void Tracking::Track()
 
         mpFrameDrawer->Update(this);
 
+        // 初始化失败了，直接返回
         if(mState!=OK)
             return;
     }
@@ -304,8 +305,11 @@ void Tracking::Track()
                 // Local Mapping might have changed some MapPoints tracked in last frame
                 CheckReplacedInLastFrame();
 
+                // 这里的mVelocity有点误导性，其实是指上一帧的位姿相对于上上一帧的位姿的变换
                 if(mVelocity.empty() || mCurrentFrame.mnId<mnLastRelocFrameId+2)
                 {
+                    // 初始化时，这里的reference keyframe会在初始化函数StereoInitialization()中被置为初始帧；
+                    // 否则会在UpdateLocalKeyFrames()中被置为有最多共视点的keyframe
                     bOK = TrackReferenceKeyFrame();
                 }
                 else
@@ -317,6 +321,7 @@ void Tracking::Track()
             }
             else
             {
+                // 3.22 该看重定位了
                 bOK = Relocalization();
             }
         }
@@ -508,6 +513,7 @@ void Tracking::Track()
 
 void Tracking::StereoInitialization()
 {
+    // 初始化的前提是当前帧的ORB特征点数大于500
     if(mCurrentFrame.N>500)
     {
         // Set Frame pose to the origin
@@ -753,7 +759,7 @@ void Tracking::CheckReplacedInLastFrame()
     }
 }
 
-
+// 以参考帧的位姿作为当前帧的位姿初值，然后用BA优化当前帧位姿
 bool Tracking::TrackReferenceKeyFrame()
 {
     // Compute Bag of Words vector
@@ -764,12 +770,15 @@ bool Tracking::TrackReferenceKeyFrame()
     ORBmatcher matcher(0.7,true);
     vector<MapPoint*> vpMapPointMatches;
 
+    // 这里用BoW约束ORB特征点匹配，具体做法是：在参考帧和当前帧中，只有属于同一个单词的ORB特征才会进行暴力匹配.
+    // 好处是匹配精度会比较高，匹配速度也会比较快
     int nmatches = matcher.SearchByBoW(mpReferenceKF,mCurrentFrame,vpMapPointMatches);
 
     if(nmatches<15)
         return false;
 
     mCurrentFrame.mvpMapPoints = vpMapPointMatches;
+    // 用上一帧的位姿作为当前帧的位姿初值
     mCurrentFrame.SetPose(mLastFrame.mTcw);
 
     Optimizer::PoseOptimization(&mCurrentFrame);
@@ -837,8 +846,10 @@ void Tracking::UpdateLastFrame()
         bool bCreateNew = false;
 
         MapPoint* pMP = mLastFrame.mvpMapPoints[i];
+        // 如果索引i对应的MapPoint为空，那么需要创建一个新的MapPoint
         if(!pMP)
             bCreateNew = true;
+        // 如果索引i对应的MapPoint存在，但观测到它的关键帧数量为0，也需要创建一个新的MapPoint
         else if(pMP->Observations()<1)
         {
             bCreateNew = true;
@@ -851,6 +862,7 @@ void Tracking::UpdateLastFrame()
 
             mLastFrame.mvpMapPoints[i]=pNewMP;
 
+            // 临时地图点存储
             mlpTemporalPoints.push_back(pNewMP);
             nPoints++;
         }
@@ -859,17 +871,25 @@ void Tracking::UpdateLastFrame()
             nPoints++;
         }
 
+        // 因为vDepthIdx是按照深度从小到大排序的，所以当深度大于mThDepth时，就可以提前结束循环.
+        // 因为深度小的MapPoint可信度更高，所以我们优先保留深度小的MapPoint
         if(vDepthIdx[j].first>mThDepth && nPoints>100)
             break;
     }
 }
 
+// 匀速运动模型提供当前帧的位姿初值，然后用BA优化当前帧位姿
 bool Tracking::TrackWithMotionModel()
 {
     ORBmatcher matcher(0.9,true);
 
     // Update last frame pose according to its reference keyframe
     // Create "visual odometry" points if in Localization Mode
+
+    // note 为什么需要更新上一帧？
+    // 1. 因为关键帧的位姿可能会在Local Mapping或者Loop Closing中被优化，所以需要更新关键帧位姿；
+    //    而上一帧的位姿需要随着关键帧位姿的更新而更新，这是为了保证全局一致性
+    // 2. 上一帧可能不是关键帧，因此没有对应的MapPoints，需要创建作者说的"visual odometry" points
     UpdateLastFrame();
 
     mCurrentFrame.SetPose(mVelocity*mLastFrame.mTcw);
@@ -1227,20 +1247,34 @@ void Tracking::UpdateLocalPoints()
     }
 }
 
-
+/**
+ * @brief 从当前帧的共视关键帧、共视关键帧的共视关键帧、最小生成树的父、子关键帧中找到候选关键帧；
+ *        这些候选关键帧即是局部地图中的关键帧.
+ */
 void Tracking::UpdateLocalKeyFrames()
 {
     // Each map point vote for the keyframes in which it has been observed
     map<KeyFrame*,int> keyframeCounter;
+
+    // 分别统计每一个与当前帧存在共视关系的关键帧与当前帧的共视地图点的数量
+    // 例子：3个地图点，1(A,B,C),2(A,B),3(A,C,D)，ABCD表示关键帧.
+    // 处理地图点1时，keyframeCounter[A]=1,keyframeCounter[B]=1,keyframeCounter[C]=1
+    // 处理地图点2时，keyframeCounter[A]=2,keyframeCounter[B]=2
+    // 处理地图点3时，keyframeCounter[A]=3,keyframeCounter[C]=2,keyframeCounter[D]=1
+    // 最终: keyframeCounter[A]=3,keyframeCounter[B]=2,keyframeCounter[C]=2,keyframeCounter[D]=1
     for(int i=0; i<mCurrentFrame.N; i++)
     {
+        // 对于当前帧中的每一个地图点
         if(mCurrentFrame.mvpMapPoints[i])
         {
             MapPoint* pMP = mCurrentFrame.mvpMapPoints[i];
+            // 如果地图点没有被标记为坏点
             if(!pMP->isBad())
             {
+                // 获取观测到该地图点的所有关键帧
                 const map<KeyFrame*,size_t> observations = pMP->GetObservations();
-                for(map<KeyFrame*,size_t>::const_iterator it=observations.begin(), itend=observations.end(); it!=itend; it++)
+                // 遍历所有观测到该地图点的关键帧
+                for(map<KeyFrame*,size_t>::const_iterator it=observations.begin(), itend=observations.end(); it!=itend; it++) 
                     keyframeCounter[it->first]++;
             }
             else
@@ -1250,6 +1284,7 @@ void Tracking::UpdateLocalKeyFrames()
         }
     }
 
+    // 也就意味着没有与当前帧共视的关键帧
     if(keyframeCounter.empty())
         return;
 
@@ -1260,6 +1295,7 @@ void Tracking::UpdateLocalKeyFrames()
     mvpLocalKeyFrames.reserve(3*keyframeCounter.size());
 
     // All keyframes that observe a map point are included in the local map. Also check which keyframe shares most points
+    // 对于当前帧的所有共视关键帧，找出共视地图点最多的关键帧
     for(map<KeyFrame*,int>::const_iterator it=keyframeCounter.begin(), itEnd=keyframeCounter.end(); it!=itEnd; it++)
     {
         KeyFrame* pKF = it->first;
@@ -1273,20 +1309,26 @@ void Tracking::UpdateLocalKeyFrames()
             pKFmax=pKF;
         }
 
+        // 把共视关键帧加入到mvpLocalKeyFrames中
         mvpLocalKeyFrames.push_back(it->first);
+        // 标记该共视关键帧被当前帧纳入候选关键帧
         pKF->mnTrackReferenceForFrame = mCurrentFrame.mnId;
     }
 
 
     // Include also some not-already-included keyframes that are neighbors to already-included keyframes
+    // 试图找到一些没有被包含的关键帧，这些关键帧是当前帧的共视关键帧的共视关键帧(取共视点最多的前10个).
+    // 对于每一个共视关键帧
     for(vector<KeyFrame*>::const_iterator itKF=mvpLocalKeyFrames.begin(), itEndKF=mvpLocalKeyFrames.end(); itKF!=itEndKF; itKF++)
     {
         // Limit the number of keyframes
+        // 如果已经找到了80个共视关键帧，就不再寻找共视关键帧的共视关键帧了
         if(mvpLocalKeyFrames.size()>80)
             break;
 
         KeyFrame* pKF = *itKF;
 
+        // 获取共视点最多的前10个关键帧
         const vector<KeyFrame*> vNeighs = pKF->GetBestCovisibilityKeyFrames(10);
 
         for(vector<KeyFrame*>::const_iterator itNeighKF=vNeighs.begin(), itEndNeighKF=vNeighs.end(); itNeighKF!=itEndNeighKF; itNeighKF++)
@@ -1294,16 +1336,27 @@ void Tracking::UpdateLocalKeyFrames()
             KeyFrame* pNeighKF = *itNeighKF;
             if(!pNeighKF->isBad())
             {
+                // 排除已经被当前帧纳入候选关键帧的关键帧
+                // 解释一下这里的逻辑：假设当前帧有A,B,C三个共视关键帧；
+                // A的共视关键帧有B、D，B的共视关键帧有A、C、E，C的共视关键帧有B、D；
+                // 那么对于A来说，B、D是共视关键帧，但是B已经被纳入候选关键帧，所以只能选择D；
+                // 对于B来说，A、C、E是共视关键帧，但是A、C已经被纳入候选关键帧，所以只能选择E；
+                // 对于C来说，B、D是共视关键帧，但是B、D都已经被纳入候选关键帧，所以没有可选的关键帧；
+                // 所以最终的候选关键帧是A、B、C、D、E；
                 if(pNeighKF->mnTrackReferenceForFrame!=mCurrentFrame.mnId)
                 {
+                    // 把合格的关键帧加入到mvpLocalKeyFrames(候选关键帧)中
                     mvpLocalKeyFrames.push_back(pNeighKF);
                     pNeighKF->mnTrackReferenceForFrame=mCurrentFrame.mnId;
+                    // 只要在当前共视关键帧的共视关键帧中找到一个合格的关键帧，就跳出循环
                     break;
                 }
             }
         }
 
+        // 从最小生成树中获取当前共视关键帧的子关键帧
         const set<KeyFrame*> spChilds = pKF->GetChilds();
+        // 这里跟前面类似，只不过是从最小生成树的子关键帧中找候选关键帧
         for(set<KeyFrame*>::const_iterator sit=spChilds.begin(), send=spChilds.end(); sit!=send; sit++)
         {
             KeyFrame* pChildKF = *sit;
@@ -1313,11 +1366,13 @@ void Tracking::UpdateLocalKeyFrames()
                 {
                     mvpLocalKeyFrames.push_back(pChildKF);
                     pChildKF->mnTrackReferenceForFrame=mCurrentFrame.mnId;
+                    // 只要找到一个合格的候选关键帧，就跳出循环
                     break;
                 }
             }
         }
 
+        // 把父关键帧加入到候选关键帧中
         KeyFrame* pParent = pKF->GetParent();
         if(pParent)
         {
@@ -1331,6 +1386,7 @@ void Tracking::UpdateLocalKeyFrames()
 
     }
 
+    // 把具有最多共视点的关键帧作为参考关键帧
     if(pKFmax)
     {
         mpReferenceKF = pKFmax;

@@ -1325,6 +1325,15 @@ int ORBmatcher::SearchBySim3(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint*> &
     return nFound;
 }
 
+/**
+ * @brief 利用投影关系的约束加速匹配
+ * @param CurrentFrame 当前帧
+ * @param LastFrame 上一帧
+ * @param th 窗口大小
+ * @details 根据当前帧的位姿初值，利用上一帧的地图点进行投影，然后在当前帧的特征点窗口范围内搜索匹配点，
+ *          极大地提高了匹配的速度、准确性
+ * @return 匹配的数量
+ */
 int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, const float th, const bool bMono)
 {
     int nmatches = 0;

@@ -301,6 +301,8 @@ Vector3d EdgeStereoSE3ProjectXYZOnlyPose::cam_project(const Vector3d & trans_xyz
   Vector3d res;
   res[0] = trans_xyz[0]*invz*fx + cx;
   res[1] = trans_xyz[1]*invz*fy + cy;
+  // 对应ORB-SLAM2论文中的公式(3)中的第二个式子
+  // 这里的bf * invz其实是视差
   res[2] = res[0] - bf*invz;
   return res;
 }
