@@ -325,7 +325,7 @@ void Tracking::Track()
                 bOK = Relocalization();
             }
         }
-        else
+        else // 也就是仅定位模式
         {
             // Localization Mode: Local Mapping is deactivated
 
@@ -952,8 +952,11 @@ bool Tracking::TrackLocalMap()
     // We have an estimation of the camera pose and some map points tracked in the frame.
     // We retrieve the local map and try to find matches to points in the local map.
 
+
     UpdateLocalMap();
 
+    // 从mvpLocalMapPoints中挑选合格的地图点(地图点会记录自己的描述子)，
+    // 并投影到当前帧中进行描述子匹配，匹配成功的地图点会加入到当前帧的地图点中
     SearchLocalPoints();
 
     // Optimize Pose
@@ -1082,6 +1085,7 @@ bool Tracking::NeedNewKeyFrame()
 
 void Tracking::CreateNewKeyFrame()
 {
+    // 插入关键帧前，先设置标志位，不允许local mapping线程停止
     if(!mpLocalMapper->SetNotStop(true))
         return;
 
@@ -1163,6 +1167,7 @@ void Tracking::CreateNewKeyFrame()
 void Tracking::SearchLocalPoints()
 {
     // Do not search map points already matched
+    // 这里是针对当前帧的地图点：去除坏点，并将每个地图点的最近一次被观察的帧设置为当前帧
     for(vector<MapPoint*>::iterator vit=mCurrentFrame.mvpMapPoints.begin(), vend=mCurrentFrame.mvpMapPoints.end(); vit!=vend; vit++)
     {
         MapPoint* pMP = *vit;
@@ -1174,7 +1179,9 @@ void Tracking::SearchLocalPoints()
             }
             else
             {
+                // 增加一次被观察次数
                 pMP->IncreaseVisible();
+                // 将地图点最近一次被观察的帧的Id设置为当前帧Id
                 pMP->mnLastFrameSeen = mCurrentFrame.mnId;
                 pMP->mbTrackInView = false;
             }
@@ -1192,6 +1199,8 @@ void Tracking::SearchLocalPoints()
         if(pMP->isBad())
             continue;
         // Project (this fills MapPoint variables for matching)
+        // 这里是在检查当前帧观察该地图点的视线方向与该地图点的平均观察方向的夹角是否太大
+        // (这里0.5对应cos(60))
         if(mCurrentFrame.isInFrustum(pMP,0.5))
         {
             pMP->IncreaseVisible();
@@ -1212,6 +1221,12 @@ void Tracking::SearchLocalPoints()
     }
 }
 
+/**
+ * @brief 主要做两件事：
+ *        1. 更新局部地图的关键帧，存到mvpLocalKeyFrames中。
+ *        2. 遍历mvpLocalKeyFrames中的所有关键帧的所有地图点，
+ *           将判断合格的地图点放到mvpLocalMapPoints中。
+ */
 void Tracking::UpdateLocalMap()
 {
     // This is for visualization
@@ -1415,6 +1430,7 @@ bool Tracking::Relocalization()
     vector<PnPsolver*> vpPnPsolvers;
     vpPnPsolvers.resize(nKFs);
 
+    // 存放每一个候选关键帧与当前帧的匹配地图点
     vector<vector<MapPoint*> > vvpMapPointMatches;
     vvpMapPointMatches.resize(nKFs);
 
@@ -1463,6 +1479,9 @@ bool Tracking::Relocalization()
             int nInliers;
             bool bNoMore;
 
+            // RANSAC的思想是：
+            // 从所有匹配点中随机选择4个点，然后用这4个点求解相机位姿，根据这个位姿计算其余所有点的重投影误差，
+            // 如果重投影误差小于某个阈值，就认为这个点是内点，否则是外点；
             PnPsolver* pSolver = vpPnPsolvers[i];
             cv::Mat Tcw = pSolver->iterate(5,bNoMore,vbInliers,nInliers);
 
@@ -1484,6 +1503,7 @@ bool Tracking::Relocalization()
 
                 for(int j=0; j<np; j++)
                 {
+                    // 针对当前候选帧，把每一个内点对应的地图点加入到当前帧的地图点中
                     if(vbInliers[j])
                     {
                         mCurrentFrame.mvpMapPoints[j]=vvpMapPointMatches[i][j];
@@ -1493,16 +1513,20 @@ bool Tracking::Relocalization()
                         mCurrentFrame.mvpMapPoints[j]=NULL;
                 }
 
+                // 根据当前的内点(对应的地图点)，对当前帧的位姿进行优化
                 int nGood = Optimizer::PoseOptimization(&mCurrentFrame);
 
                 if(nGood<10)
                     continue;
 
+                // 执行优化后，内点可能会变成外点，所以需要把外点对应的地图点置空
                 for(int io =0; io<mCurrentFrame.N; io++)
                     if(mCurrentFrame.mvbOutlier[io])
                         mCurrentFrame.mvpMapPoints[io]=static_cast<MapPoint*>(NULL);
 
                 // If few inliers, search by projection in a coarse window and optimize again
+                // 前面是用词袋约束做ORB特征匹配，如果优化后的内点太少，则根据优化后的当前帧位姿，
+                // 利用候选关键帧的地图点投影约束新增匹配点
                 if(nGood<50)
                 {
                     int nadditional =matcher2.SearchByProjection(mCurrentFrame,vpCandidateKFs[i],sFound,10,100);

@@ -99,12 +99,18 @@ void LocalMapping::Run()
 
         ResetIfRequested();
 
-        // Tracking will see that Local Mapping is busy
+        // Tracking will see that Local Mapping is not busy
+        // 设置当前状态为空闲，可以接受关键帧
         SetAcceptKeyFrames(true);
 
+        // 检查是否需要退出local mapping线程
         if(CheckFinish())
             break;
-
+        
+        // 个人理解，这里休眠3毫秒是为了让tracking线程有时间可以插入新的关键帧；
+        // 因为前面设置了mbAcceptKeyFrames为true，如果立马就进入下一次while，那么
+        // 大概率还是没有新的关键帧(关键帧的插入不会这么频繁)，所以没有必要立即进入下一次
+        // while，造成cpu资源的浪费
         usleep(3000);
     }
 
@@ -158,7 +164,7 @@ void LocalMapping::ProcessNewKeyFrame()
                 }
             }
         }
-    }    
+    } 
 
     // Update links in the Covisibility Graph
     mpCurrentKeyFrame->UpdateConnections();

@@ -115,11 +115,18 @@ protected:
 
     bool mbAbortBA;
 
+    // 标志位，表示local mapping线程是否停止(这里的停止具体代表睡眠，不是真的退出线程)
     bool mbStopped;
+    // 标志位，用于loop closing线程请求local mapping线程停止
     bool mbStopRequested;
+
+    // 标志位，tracking线程在插入新的关键帧前，会把这个标志位设置为true；插入完成后，会设置为false
+    // 这个标志位的意义在于：tracking线程在插入关键帧时，local mapping不能停止
     bool mbNotStop;
     std::mutex mMutexStop;
 
+    // 标志位，表示local mapping线程是否可以接受新的关键帧
+    // true:表示空闲，可以接受新的关键帧；false:表示正在处理关键帧，不可以接受新的关键帧
     bool mbAcceptKeyFrames;
     std::mutex mMutexAccept;
 };

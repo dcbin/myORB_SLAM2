@@ -201,6 +201,9 @@ private:
     // Assign keypoints to the grid for speed up feature matching (called in the constructor).
     void AssignFeaturesToGrid();
 
+    // 结合语义信息和几何信息去除动态点
+    int RmDynamicPointWithSemanticAndGeometry(cv::Mat &imGrayPre, cv::Mat &imGray);
+
     // Rotation, translation and camera center
     cv::Mat mRcw;
     cv::Mat mtcw;

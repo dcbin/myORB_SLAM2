@@ -23,6 +23,14 @@
 #include "ORBmatcher.h"
 #include <thread>
 
+// 全局变量的作用域是当前.cc文件以及它所包含的所有头文件
+std::vector<cv::Point2f> Prepoint,PrepointRmDynamic,Curpoint,CurpointRmDynamic;
+std::vector<uchar> State;
+std::vector<float> Err;
+cv::Mat imGrayPre;
+bool bPreFrameHavePotentialDynamicObj = false; // 暂且先不考虑目标检测线程
+std::vector<cv::Mat mask> vPreFramePotentialDynamicMask;
+
 namespace ORB_SLAM2
 {
 
@@ -57,7 +65,7 @@ Frame::Frame(const Frame &frame)
         SetPose(frame.mTcw);
 }
 
-
+// 适用于双目数据的帧构造函数
 Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, ORBextractor* extractorLeft, ORBextractor* extractorRight, ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth)
     :mpORBvocabulary(voc),mpORBextractorLeft(extractorLeft),mpORBextractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()),mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
      mpReferenceKF(static_cast<KeyFrame*>(NULL))
@@ -116,6 +124,7 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
     AssignFeaturesToGrid();
 }
 
+// 适用于RGBD数据的帧构造函数
 Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth)
     :mpORBvocabulary(voc),mpORBextractorLeft(extractor),mpORBextractorRight(static_cast<ORBextractor*>(NULL)),
      mTimeStamp(timeStamp), mK(K.clone()),mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth)
@@ -134,6 +143,22 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeSt
 
     // ORB extraction
     ExtractORB(0,imGray);
+
+    std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
+    cv::Mat  imGrayT = imGray;
+    if(imGrayPre.data)
+    {
+        RmDynamicPointWithSemanticAndGeometry(imGrayPre, imGray);
+        std::swap(imGrayPre, imGrayT);
+    }
+    else
+    {
+        std::swap(imGrayPre, imGrayT);
+    }
+
+    std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
+    double tRmDynamic = std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count();
+    std::cout << "RmDynamicPoint time =" << tRmDynamic*1000 <<  std::endl;
 
     N = mvKeys.size();
 
@@ -296,13 +321,19 @@ bool Frame::isInFrustum(MapPoint *pMP, float viewingCosLimit)
     // Check distance is in the scale invariance region of the MapPoint
     const float maxDistance = pMP->GetMaxDistanceInvariance();
     const float minDistance = pMP->GetMinDistanceInvariance();
+    // mOw是相机光心在世界坐标系中的位置，
+    // 这里用地图点的世界坐标减去相机的世界坐标，
+    // 得到的是地图点在当前帧的坐标
     const cv::Mat PO = P-mOw;
+    // 计算地图点与相机光心的距离
     const float dist = cv::norm(PO);
 
     if(dist<minDistance || dist>maxDistance)
         return false;
 
    // Check viewing angle
+   // 获取平均视线的方向，按照论文中的说法是：
+   // 所有观察到该地图点的帧的视线方向的平均向量
     cv::Mat Pn = pMP->GetNormal();
 
     const float viewCos = PO.dot(Pn)/dist;
@@ -399,6 +430,96 @@ void Frame::ComputeBoW()
         vector<cv::Mat> vCurrentDesc = Converter::toDescriptorVector(mDescriptors);
         mpORBvocabulary->transform(vCurrentDesc,mBowVec,mFeatVec,4);
     }
+}
+
+int Frame::RmDynamicPointWithSemanticAndGeometry(cv::Mat &imGrayPre, cv::Mat &imGray)
+{
+    Curpoint.clear();
+    Prepoint.clear();
+    CurpointRmDynamic.clear();
+    PrepointRmDynamic.clear();
+    for(auto it = mvKeys.begin(); it != mvKeys.end(); ++it)
+    {
+        Curpoint.push_back(it->pt);
+    }
+
+    cv::calcOpticalFlowPyrLK(imGray, imGrayPre, Curpoint, Prepoint, State, Err,
+                             cv::Size(21, 21), 3,
+                             cv::TermCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 30, 0.01));
+
+    int Cur_keypoint_sum = Curpoint.size();
+    int Pre_keypoint_sum;
+    cv::Mat FundMat;
+    // if(bPreFrameHavePotentialDynamicObj)
+    // {
+    //     for(auto itc = Curpoint.begin(), itp = Prepoint.begin(); itp != Prepoint.end(); ++itc,++itp)
+    //     {
+    //         if(!isInDynamicRegion(*itp, vPreFramePotentialDynamicMask))
+    //         {
+    //             CurpointRmDynamic.push_back(*itc);
+    //             PrepointRmDynamic.push_back(*itp);
+    //         }
+    //     }
+    //     Pre_keypoint_sum = PrepointRmDynamic.size();
+    // }
+    // else 
+    //     Pre_keypoint_sum = Prepoint.size();
+    
+    // 计算基础矩阵F
+    cv::Mat F;
+    if(Pre_keypoint_sum > 20 && bPreFrameHavePotentialDynamicObj)
+    {
+        F = cv::findFundamentalMat(PrepointRmDynamic, CurpointRmDynamic, cv::FM_RANSAC, 3, 0.99, State);
+    }
+    else
+    {
+        F = cv::findFundamentalMat(Prepoint, Curpoint, cv::FM_RANSAC, 3, 0.99, State);
+    }
+
+    int  offset = 0;
+    auto it_cur = mvKeys.begin();
+    auto it_pre = Prepoint.begin();
+
+    cv::Mat mDescriptors_Temp;
+    std::vector<cv::KeyPoint> mvKeys_Temp = mvKeys;
+    while(it_cur != mvKeys.end())
+    {
+        if(!CheckEpiLineDist(*it_cur, *it_pre, F, 0.2))
+        {
+                mvKeys.erase(it_cur);
+                it_pre++;
+                Cur_keypoint_sum--;
+        }
+        else
+        {
+                mDescriptors_Temp.push_back(mDescriptors.row(offset));
+                it_cur++;
+                it_pre++;
+        }
+        offset++;
+    }
+    if(Cur_keypoint_sum < mpORBextractorLeft->GetnFeatures()*0.1)
+    {
+        //std::cout<<"Cur_keypoint_sum: "<<Cur_keypoint_sum<<std::endl;
+        std::swap(mvKeys, mvKeys_Temp);
+    }
+    else
+        std::swap(mDescriptors, mDescriptors_Temp);
+}
+
+bool CheckEpiLineDist(cv::KeyPoint &kpCur, cv::Point2f &kpPre, cv::Mat &F, float th)
+{
+    cv::Mat p1 = (cv::Mat_<float>(3,1) << kpPre.x, kpPre.y, 1);
+    cv::Mat p2 = (cv::Mat_<float>(3,1) << kpCur.pt.x, kpCur.pt.y, 1);
+    cv::Mat l2 = F * p1; // 极线
+    double X = l2.at<float>(0, 0);
+    double Y = l2.at<float>(1, 0);
+    cv::Mat l1 = p2.t() * F * p1;
+    double dis = fabs(l1.at<float>(0, 0)) / sqrt(X * X + Y * Y);
+    if(dis < th)
+        return true;
+    else
+        return false;
 }
 
 void Frame::UndistortKeyPoints()
