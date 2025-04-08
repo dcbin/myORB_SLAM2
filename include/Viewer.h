@@ -80,11 +80,10 @@ private:
     bool mbStopped;
     bool mbStopRequested;
     std::mutex mMutexStop;
-    cv::Mat img_to_show;
 public:
     YoloSeg *mpInstanceSeg;
+    cv::Mat img_to_show;
 };
-
 }
 
 

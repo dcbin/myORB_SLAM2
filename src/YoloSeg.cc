@@ -40,6 +40,11 @@ namespace ORB_SLAM2
         ex.extract("out1", mask_proto_); // 掩膜输出
     
         postprocess();
+        
+        {
+            std::unique_lock<std::mutex> lock(mMutex);
+            detections_.swap(detections_to_show_);
+        }
     }
     
     void YoloSeg::preprocess(const cv::Mat& image) {
@@ -58,7 +63,6 @@ namespace ORB_SLAM2
     void YoloSeg::postprocess() {
         const int num_classes = 80;
         const int mask_dim = 32;
-    
         // 1. 解析检测框
         parse_detections(num_classes, mask_dim);
     
@@ -345,20 +349,26 @@ namespace ORB_SLAM2
     }
 
     void YoloSeg::DrawSegmentation(cv::Mat& image) {
-        if (detections_.empty()) return;
+        std::vector<SegResult> current_detections;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            current_detections = detections_to_show_; // 拷贝（避免长时间持锁）
+        }
+        if (current_detections.empty()) return;
         assert(image.size() == cv::Size(640, 500));
-        for (const auto& detection : detections_) {
-            // 1. 调整掩膜尺寸以匹配填充后的图像(640x500)
+        for (const auto& detection : current_detections) {
             cv::Mat padded_mask = cv::Mat::zeros(image.size(), detection.mask.type());
             // 将原始掩膜复制到填充后掩膜的顶部（不覆盖底部填充区域）
             detection.mask.copyTo(padded_mask(cv::Rect(0, 0, 640, 480)));
-            
             // 3. 生成掩膜颜色（仅对非零区域）
             cv::Mat mask_color = cv::Mat::zeros(image.size(), CV_8UC3);
             cv::Mat mask_8u;
             padded_mask.convertTo(mask_8u, CV_8UC1); // 转换为0~255
-            cv::applyColorMap(mask_8u, mask_color, cv::COLORMAP_JET);
-            
+            cv::Vec3b color = cv::Vec3b(colors_[detection.class_id][2], 
+                                        colors_[detection.class_id][1], 
+                                        colors_[detection.class_id][0]);
+            mask_color.setTo(color, padded_mask); // 仅对非零区域设置颜色
+
             // 4. 混合掩膜颜色和原图，降低掩膜颜色的透明度
             cv::Mat blended_image;
             cv::addWeighted(image, 0.5, mask_color, 0.5, 0, blended_image);
@@ -370,7 +380,7 @@ namespace ORB_SLAM2
             // 6. 绘制调整后的bbox和文字
             cv::rectangle(image, detection.bbox, cv::Scalar(255, 0, 0), 1);
             std::string label = detection.class_name + " " + cv::format("%.2f", detection.confidence);
-            cv::putText(image, label, cv::Point(detection.bbox.x, detection.bbox.y - 5), 
+            cv::putText(image, label, cv::Point(detection.bbox.x, std::max(detection.bbox.y-5, 5.0f)),
                         cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 255), 2);
         }
     }

@@ -134,9 +134,9 @@ void Viewer::Run()
 
         pangolin::FinishFrame();
 
-        img_to_show = mpFrameDrawer->DrawFrame();
-        mpInstanceSeg->DrawSegmentation(img_to_show);
-        cv::imshow("ORB-SLAM2: Current Frame",img_to_show);
+        cv::Mat im = mpFrameDrawer->DrawFrame();
+        mpInstanceSeg->DrawSegmentation(im);
+        cv::imshow("ORB-SLAM2: Current Frame",im);
         cv::waitKey(mT);
 
         if(menuReset)
