@@ -35,6 +35,7 @@
 #include "KeyFrameDatabase.h"
 #include "ORBVocabulary.h"
 #include "Viewer.h"
+#include "YoloSeg.h"
 
 namespace ORB_SLAM2
 {
@@ -45,6 +46,7 @@ class Map;
 class Tracking;
 class LocalMapping;
 class LoopClosing;
+class YoloSeg;
 
 class System
 {
@@ -121,6 +123,9 @@ public:
     int GetTrackingState();
     std::vector<MapPoint*> GetTrackedMapPoints();
     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
+
+    YoloSeg *mpInstanceSeg;
+    std::thread *mpInstanceSegThread;
 
 private:
 

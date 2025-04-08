@@ -27,6 +27,7 @@
 #include <opencv2/imgproc/types_c.h>
 #include <unistd.h>
 
+#include "YoloSeg.h"
 #include"Viewer.h"
 #include"FrameDrawer.h"
 #include"Map.h"
@@ -39,7 +40,6 @@
 #include "Initializer.h"
 #include "MapDrawer.h"
 #include "System.h"
-
 #include <mutex>
 
 namespace ORB_SLAM2
@@ -51,6 +51,8 @@ class Map;
 class LocalMapping;
 class LoopClosing;
 class System;
+class YoloSeg;
+class Frame;
 
 class Tracking
 {  
@@ -68,6 +70,10 @@ public:
     void SetLoopClosing(LoopClosing* pLoopClosing);
     void SetViewer(Viewer* pViewer);
 
+    void SetInstanceSeg(YoloSeg *InstanceSeg);
+    void GetNewImage(const cv::Mat& img);
+    bool isSegFinished();
+    
     // Load new settings
     // The focal lenght should be similar or scale prediction will fail when projecting points
     // TODO: Modify MapPoint::PredictScale to take into account focal lenght
@@ -76,9 +82,10 @@ public:
     // Use this function if you have deactivated local mapping and you only want to localize the camera.
     void InformOnlyTracking(const bool &flag);
 
-
 public:
-
+    bool mbSegFinishedFlag;
+    cv::Mat mImRGB;
+    YoloSeg *mpInstanceSeg;
     // Tracking states
     enum eTrackingState{
         SYSTEM_NOT_READY=-1,

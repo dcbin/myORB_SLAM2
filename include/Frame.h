@@ -29,6 +29,7 @@
 #include "ORBVocabulary.h"
 #include "KeyFrame.h"
 #include "ORBextractor.h"
+#include "YoloSeg.h"
 
 #include <opencv2/opencv.hpp>
 
@@ -39,6 +40,7 @@ namespace ORB_SLAM2
 
 class MapPoint;
 class KeyFrame;
+class Tracking;
 
 class Frame
 {
@@ -52,7 +54,7 @@ public:
     Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, ORBextractor* extractorLeft, ORBextractor* extractorRight, ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth);
 
     // Constructor for RGB-D cameras.
-    Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth);
+    Frame(Tracking* pTracker, const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth);
 
     // Constructor for Monocular cameras.
     Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth);
@@ -99,6 +101,7 @@ public:
     cv::Mat UnprojectStereo(const int &i);
 
 public:
+    Tracking* mpTracker;
     // Vocabulary used for relocalization.
     ORBVocabulary* mpORBvocabulary;
 
@@ -187,7 +190,6 @@ public:
 
     static bool mbInitialComputations;
 
-
 private:
 
     // Undistort keypoints given OpenCV distortion parameters.
@@ -200,7 +202,7 @@ private:
 
     // Assign keypoints to the grid for speed up feature matching (called in the constructor).
     void AssignFeaturesToGrid();
-
+    void RmDynamicPointWithSemanticAndGeometry(const cv::Mat &imGray);
     // Rotation, translation and camera center
     cv::Mat mRcw;
     cv::Mat mtcw;

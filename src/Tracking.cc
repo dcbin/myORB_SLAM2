@@ -208,7 +208,7 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const d
 {
     mImGray = imRGB;
     cv::Mat imDepth = imD;
-
+    mImRGB = imRGB.clone();
     if(mImGray.channels()==3)
     {
         if(mbRGB)
@@ -227,7 +227,7 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const d
     if((fabs(mDepthMapFactor-1.0f)>1e-5) || imDepth.type()!=CV_32F)
         imDepth.convertTo(imDepth,CV_32F,mDepthMapFactor);
 
-    mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
+    mCurrentFrame = Frame(this,mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
 
     Track();
 
@@ -262,6 +262,32 @@ cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp)
     Track();
 
     return mCurrentFrame.mTcw.clone();
+}
+
+void Tracking::SetInstanceSeg(YoloSeg* InstanceSeg)
+{
+    mpInstanceSeg = InstanceSeg;
+}
+
+bool Tracking::isSegFinished()
+{
+    std::unique_lock <std::mutex> lock(mpInstanceSeg->mMutexImageSegFinished);
+    if(mbSegFinishedFlag)
+    {
+        mbSegFinishedFlag=false;
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+void Tracking::GetNewImage(const cv::Mat& img)
+{
+    unique_lock<mutex> lock(mpInstanceSeg->mMutexGetNewImage);
+    mpInstanceSeg->mbNewImageFlag=true;
+    img.copyTo(mpInstanceSeg->mImageToSeg);
 }
 
 void Tracking::Track()

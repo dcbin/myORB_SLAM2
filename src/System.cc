@@ -19,7 +19,6 @@
 */
 
 
-
 #include "System.h"
 #include "Converter.h"
 #include <thread>
@@ -93,11 +92,16 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     //Initialize the Loop Closing thread and launch
     mpLoopCloser = new LoopClosing(mpMap, mpKeyFrameDatabase, mpVocabulary, mSensor!=MONOCULAR);
     mptLoopClosing = new thread(&ORB_SLAM2::LoopClosing::Run, mpLoopCloser);
-
+    
+    // Initialize the YoloSeg thread and launch
+    mpInstanceSeg = new YoloSeg("./ncnn_model/yolo11n-seg_half/model.ncnn.param",
+                                "./ncnn_model/yolo11n-seg_half/model.ncnn.bin");
+    std::cout << "NCNN model loaded!" << std::endl;
+    mpInstanceSegThread = new thread(&YoloSeg::run, mpInstanceSeg);
     //Initialize the Viewer thread and launch
     if(bUseViewer)
     {
-        mpViewer = new Viewer(this, mpFrameDrawer,mpMapDrawer,mpTracker,strSettingsFile);
+        mpViewer = new Viewer(this, mpFrameDrawer,mpMapDrawer,mpTracker,mpInstanceSeg,strSettingsFile);
         mptViewer = new thread(&Viewer::Run, mpViewer);
         mpTracker->SetViewer(mpViewer);
     }
@@ -105,12 +109,15 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     //Set pointers between threads
     mpTracker->SetLocalMapper(mpLocalMapper);
     mpTracker->SetLoopClosing(mpLoopCloser);
+    mpTracker->SetInstanceSeg(mpInstanceSeg);
 
     mpLocalMapper->SetTracker(mpTracker);
     mpLocalMapper->SetLoopCloser(mpLoopCloser);
 
     mpLoopCloser->SetTracker(mpTracker);
     mpLoopCloser->SetLocalMapper(mpLocalMapper);
+
+    mpInstanceSeg->SetTracker(mpTracker);
 }
 
 cv::Mat System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timestamp)
@@ -206,6 +213,7 @@ cv::Mat System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const doub
     }
     }
 
+    mpTracker->GetNewImage(im);
     cv::Mat Tcw = mpTracker->GrabImageRGBD(im,depthmap,timestamp);
 
     unique_lock<mutex> lock2(mMutexState);

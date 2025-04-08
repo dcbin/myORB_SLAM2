@@ -22,6 +22,7 @@
 #include "Converter.h"
 #include "ORBmatcher.h"
 #include <thread>
+#include "Tracking.h"
 
 namespace ORB_SLAM2
 {
@@ -116,8 +117,8 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
     AssignFeaturesToGrid();
 }
 
-Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth)
-    :mpORBvocabulary(voc),mpORBextractorLeft(extractor),mpORBextractorRight(static_cast<ORBextractor*>(NULL)),
+Frame::Frame(Tracking* pTracker, const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth)
+    :mpTracker(pTracker), mpORBvocabulary(voc),mpORBextractorLeft(extractor),mpORBextractorRight(static_cast<ORBextractor*>(NULL)),
      mTimeStamp(timeStamp), mK(K.clone()),mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth)
 {
     // Frame ID
@@ -131,10 +132,9 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeSt
     mvInvScaleFactors = mpORBextractorLeft->GetInverseScaleFactors();
     mvLevelSigma2 = mpORBextractorLeft->GetScaleSigmaSquares();
     mvInvLevelSigma2 = mpORBextractorLeft->GetInverseScaleSigmaSquares();
-
     // ORB extraction
     ExtractORB(0,imGray);
-
+    RmDynamicPointWithSemanticAndGeometry(imGray);
     N = mvKeys.size();
 
     if(mvKeys.empty())
@@ -677,6 +677,18 @@ cv::Mat Frame::UnprojectStereo(const int &i)
     }
     else
         return cv::Mat();
+}
+
+void Frame::RmDynamicPointWithSemanticAndGeometry(const cv::Mat &imGray)
+{
+    // 等待语义分割线程完成
+    while (!mpTracker->isSegFinished()) 
+    {
+        usleep(1);
+    }
+    // 获取语义分割结果
+    std::vector<SegResult> segResults = mpTracker->mpInstanceSeg->get_detections();
+    // to do: 根据语义分割结果，去除动态点
 }
 
 } //namespace ORB_SLAM

@@ -26,8 +26,8 @@
 namespace ORB_SLAM2
 {
 
-Viewer::Viewer(System* pSystem, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Tracking *pTracking, const string &strSettingPath):
-    mpSystem(pSystem), mpFrameDrawer(pFrameDrawer),mpMapDrawer(pMapDrawer), mpTracker(pTracking),
+Viewer::Viewer(System* pSystem, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Tracking *pTracking,YoloSeg *pInstanceSeg, const string &strSettingPath):
+    mpSystem(pSystem), mpFrameDrawer(pFrameDrawer),mpMapDrawer(pMapDrawer), mpTracker(pTracking), mpInstanceSeg(pInstanceSeg),
     mbFinishRequested(false), mbFinished(true), mbStopped(true), mbStopRequested(false)
 {
     cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
@@ -134,8 +134,9 @@ void Viewer::Run()
 
         pangolin::FinishFrame();
 
-        cv::Mat im = mpFrameDrawer->DrawFrame();
-        cv::imshow("ORB-SLAM2: Current Frame",im);
+        img_to_show = mpFrameDrawer->DrawFrame();
+        mpInstanceSeg->DrawSegmentation(img_to_show);
+        cv::imshow("ORB-SLAM2: Current Frame",img_to_show);
         cv::waitKey(mT);
 
         if(menuReset)
