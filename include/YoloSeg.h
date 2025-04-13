@@ -2,6 +2,7 @@
 #define YOlOSEG_H
 #include <opencv2/opencv.hpp>
 #include "Thirdparty/ncnn/ncnn/net.h"
+#include "Thirdparty/ncnn/ncnn/layer.h"
 #include <vector>
 #include <fstream>
 #include <chrono>
@@ -25,7 +26,7 @@ public:
     YoloSeg(const std::string& param_path, 
             const std::string& bin_path,
             int input_size = 640,
-            float conf_thresh = 0.35f,
+            float conf_thresh = 0.6f,
             float mask_thresh = 0.6f);
 
     /**
@@ -125,7 +126,9 @@ public:
     std::mutex mMutexGetNewImage;
     std::mutex mMutexImageSegFinished;
     bool mbNewImageFlag;
+    bool mbPotentialDynamicRegionExist;
     Tracking* mpTracker;
+    std::vector<SegResult> mvPotentialDynamicSegResults;
     // COCO类别标签
     const std::vector<std::string> coco_classes_ = {
         "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
@@ -138,6 +141,9 @@ public:
         "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
         "hair drier", "toothbrush"
     };
+    // const std::vector<int> mvPotentialDynamicId = {
+    //     0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 41, 45, 56, 66
+    // };
     const unsigned char colors_[80][3] = {
         {56,  0,   255},
         {226, 255, 0},

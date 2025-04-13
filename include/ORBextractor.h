@@ -82,6 +82,10 @@ public:
         return mvInvLevelSigma2;
     }
 
+    int inline GetNFeatures(){
+        return nfeatures;
+    }
+
     std::vector<cv::Mat> mvImagePyramid;
 
 protected:

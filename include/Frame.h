@@ -202,7 +202,9 @@ private:
 
     // Assign keypoints to the grid for speed up feature matching (called in the constructor).
     void AssignFeaturesToGrid();
-    void RmDynamicPointWithSemanticAndGeometry(const cv::Mat &imGray);
+    bool isInDynamicRegion(cv::Point2f &pt, const std::vector<SegResult> &DynamicSegResults);
+    void RmDynamicPointWithSemanticAndGeometry(const cv::Mat &imGray, const cv::Mat &imGrayPre);
+    bool FarFromLine(cv::Point2f &pt, cv::Point2f &pt_pre, cv::Mat &F_matrix, double threshold = 1.0);
     // Rotation, translation and camera center
     cv::Mat mRcw;
     cv::Mat mtcw;

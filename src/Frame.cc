@@ -23,6 +23,12 @@
 #include "ORBmatcher.h"
 #include <thread>
 #include "Tracking.h"
+cv::Mat imGrayPre;
+std::vector<cv::Point2f> Prepoint,PrepointRmDynamic,Curpoint,CurpointRmDynamic;
+std::vector<SegResult> LastFrameDynamicRegion;
+std::vector<uchar> State;
+std::vector<float> Err;
+bool bLastFrameHaveDynamicRegion = false;
 
 namespace ORB_SLAM2
 {
@@ -32,7 +38,6 @@ bool Frame::mbInitialComputations=true;
 float Frame::cx, Frame::cy, Frame::fx, Frame::fy, Frame::invfx, Frame::invfy;
 float Frame::mnMinX, Frame::mnMinY, Frame::mnMaxX, Frame::mnMaxY;
 float Frame::mfGridElementWidthInv, Frame::mfGridElementHeightInv;
-
 Frame::Frame()
 {}
 
@@ -134,9 +139,19 @@ Frame::Frame(Tracking* pTracker, const cv::Mat &imGray, const cv::Mat &imDepth, 
     mvInvLevelSigma2 = mpORBextractorLeft->GetInverseScaleSigmaSquares();
     // ORB extraction
     ExtractORB(0,imGray);
-    RmDynamicPointWithSemanticAndGeometry(imGray);
+    cv::Mat imGrayT = imGray;
+    if(imGrayPre.data)
+    {
+        RmDynamicPointWithSemanticAndGeometry(imGray, imGrayPre);
+        std::swap(imGrayPre,imGrayT);
+    }
+    else
+    {
+        std::swap(imGrayPre,imGrayT);
+    }
     N = mvKeys.size();
-
+    if(N == 0)
+     std::cout << "N == 0" << std::endl;
     if(mvKeys.empty())
         return;
 
@@ -679,16 +694,148 @@ cv::Mat Frame::UnprojectStereo(const int &i)
         return cv::Mat();
 }
 
-void Frame::RmDynamicPointWithSemanticAndGeometry(const cv::Mat &imGray)
+bool Frame::isInDynamicRegion(cv::Point2f &pt, const std::vector<SegResult> &DynamicSegResults)
 {
+    for(auto it = DynamicSegResults.begin(); it != DynamicSegResults.end(); ++it)
+    {
+        // 检查pt是否在mask内
+        if(it->mask.at<uchar>(pt.y, pt.x) == 255) return true;
+    }
+    return false;
+}
+
+bool Frame::FarFromLine(cv::Point2f &pt, cv::Point2f &pt_pre, cv::Mat &F_matrix, double threshold)
+{
+    double a = pt.x*F_matrix.at<double>(0,0)+pt.y*F_matrix.at<double>(0,1)+F_matrix.at<double>(0,2);
+    double b = pt.x*F_matrix.at<double>(1,0)+pt.y*F_matrix.at<double>(1,1)+F_matrix.at<double>(1,2);
+    double c = pt_pre.x*F_matrix.at<double>(2,0)+pt_pre.y*F_matrix.at<double>(2,1)+F_matrix.at<double>(2,2);
+    double son = fabs(a*pt.x + b*pt.y + c);
+    double mom = sqrt(a*a + b*b);
+    double dist = son / mom;
+
+    //return dist < 1.0;
+    return dist > threshold;
+}
+
+void Frame::RmDynamicPointWithSemanticAndGeometry(const cv::Mat &imGray, const cv::Mat &imGrayPre)
+{
+    Curpoint.clear();
+    Prepoint.clear();
+    CurpointRmDynamic.clear();
+    PrepointRmDynamic.clear();
+    State.clear();
+    Err.clear();
+    
+    for(auto it = mvKeys.begin(); it != mvKeys.end(); ++it)
+    {
+        Curpoint.push_back(it->pt);
+    }
+    
+    cv::calcOpticalFlowPyrLK(imGray, imGrayPre, Curpoint, Prepoint, State, Err, cv::Size(21, 21), 3, cv::TermCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 30, 0.01));
+    
+    int TrackedNum = 0;
+    if(bLastFrameHaveDynamicRegion)
+    {
+        for(int i = 0; i < Prepoint.size(); i++)
+        {
+            // 只处理成功跟踪的点
+            if(State[i] == 1 && !isInDynamicRegion(Prepoint[i], LastFrameDynamicRegion))
+            {
+                CurpointRmDynamic.push_back(Curpoint[i]);
+                PrepointRmDynamic.push_back(Prepoint[i]);
+            }
+        }
+        TrackedNum = PrepointRmDynamic.size();
+    }
+    else 
+    {
+        // 只计算成功跟踪的点的数量
+        TrackedNum = std::count(State.begin(), State.end(), 1);
+    }
+
+    cv::Mat F_matrix;
+    if(TrackedNum >= 15 && bLastFrameHaveDynamicRegion)
+    {
+        F_matrix = cv::findFundamentalMat(CurpointRmDynamic, PrepointRmDynamic, cv::FM_RANSAC, 1.0, 0.99);
+    }
+    else
+    {
+        // 只使用成功跟踪的点计算基础矩阵
+        std::vector<cv::Point2f> validCurpoints, validPrepoints;
+        for(int i = 0; i < State.size(); i++)
+        {
+            if(State[i] == 1)
+            {
+                validCurpoints.push_back(Curpoint[i]);
+                validPrepoints.push_back(Prepoint[i]);
+            }
+        }
+        F_matrix = cv::findFundamentalMat(validCurpoints, validPrepoints, cv::FM_RANSAC, 1.0, 0.99);
+    }
+
+    LastFrameDynamicRegion.clear();
+    bLastFrameHaveDynamicRegion = false;
+    
     // 等待语义分割线程完成
     while (!mpTracker->isSegFinished()) 
     {
         usleep(1);
     }
-    // 获取语义分割结果
-    std::vector<SegResult> segResults = mpTracker->mpInstanceSeg->get_detections();
-    // to do: 根据语义分割结果，去除动态点
+
+    // 获取潜在动态区域
+    std::vector<SegResult> PotentialDynamicSegResults = mpTracker->mpInstanceSeg->mvPotentialDynamicSegResults;
+
+    cv::Mat mDescriptors_Temp;
+    std::vector<cv::KeyPoint> mvKeys_Temp;
+    bool bCurrentFrameHaveDynamicRegion = mpTracker->mpInstanceSeg->mbPotentialDynamicRegionExist;
+
+    // 检查所有特征点是否在潜在动态区域
+    for(int i = 0; i < mvKeys.size(); i++)
+    {
+        if(State[i] == 1)
+        {
+            if(bCurrentFrameHaveDynamicRegion && isInDynamicRegion(mvKeys[i].pt, PotentialDynamicSegResults))  
+            {
+                if(!FarFromLine(mvKeys[i].pt, Prepoint[i], F_matrix, 0.1))
+                {
+                    mvKeys_Temp.push_back(mvKeys[i]);
+                    mDescriptors_Temp.push_back(mDescriptors.row(i));
+                }
+            }
+            else
+            {
+                if(!FarFromLine(mvKeys[i].pt, Prepoint[i], F_matrix, 1.0))
+                {
+                    mvKeys_Temp.push_back(mvKeys[i]);
+                    mDescriptors_Temp.push_back(mDescriptors.row(i));
+                }
+            }
+        }
+        // 如果特征点没有被跟踪到，并且它不在潜在动态区域，则加入候选特征点
+        else
+        {
+            if(!bCurrentFrameHaveDynamicRegion)
+            {
+                mvKeys_Temp.push_back(mvKeys[i]);
+                mDescriptors_Temp.push_back(mDescriptors.row(i));
+            }
+            else
+            {
+                if(!isInDynamicRegion(mvKeys[i].pt, PotentialDynamicSegResults))
+                {
+                    mvKeys_Temp.push_back(mvKeys[i]);
+                    mDescriptors_Temp.push_back(mDescriptors.row(i));
+                }
+            }
+        }
+    }
+
+    // 如果特征点数量大于50%，则更新特征点
+    if(mvKeys_Temp.size() > mpORBextractorLeft->GetNFeatures() * 0.5)
+    {
+        std::swap(mvKeys, mvKeys_Temp);
+        std::swap(mDescriptors, mDescriptors_Temp);
+    }
 }
 
 } //namespace ORB_SLAM

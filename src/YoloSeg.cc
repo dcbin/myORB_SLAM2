@@ -40,7 +40,6 @@ namespace ORB_SLAM2
         ex.extract("out1", mask_proto_); // 掩膜输出
     
         postprocess();
-        
         {
             std::unique_lock<std::mutex> lock(mMutex);
             detections_.swap(detections_to_show_);
@@ -67,13 +66,30 @@ namespace ORB_SLAM2
         parse_detections(num_classes, mask_dim);
     
         // 2. 执行NMS
-        apply_yolo_style_nms(0.5, 0.35);
+        apply_yolo_style_nms(0.5, conf_thresh_);
     
         // 3. 生成掩膜
         generate_masks();
     
         // 4. 恢复掩膜到原始图像大小
         restore_masks();
+
+        mvPotentialDynamicSegResults.clear();
+        // 5. 保存潜在动态区域
+        for(auto it = detections_.begin(); it != detections_.end(); ++it)
+        {
+            if(it->class_id == 0 || it->class_id == 56 || it->class_id == 66)
+            {
+                if(it->class_id == 0)
+                {
+                    // 对人的掩膜进行膨胀
+                    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+                    cv::dilate(it->mask, it->mask, kernel);
+                }
+                mvPotentialDynamicSegResults.push_back(*it);
+            }
+        }
+        mbPotentialDynamicRegionExist = !mvPotentialDynamicSegResults.empty();
     }
     
     void YoloSeg::parse_detections(int num_classes, int mask_dim) {
@@ -85,21 +101,22 @@ namespace ORB_SLAM2
         cv::Mat a(h, w, CV_32FC1);
         memcpy((uchar*)a.data, output_.data, w * h * sizeof(float));
         cv::Mat mat = a.t();
-        ncnn::Mat output(mat.cols, mat.rows, 1, (void*)mat.data);
-        output_ = output;
         
         // 2. 解析检测框
-        for(int i = 0; i < output_.h; ++i) {
-            const float* ptr = output_.row(i);
+        for(int i = 0; i < mat.rows; ++i) {
             // 前四维代表坐标
-            float cx = ptr[0], cy = ptr[1], width = ptr[2], height = ptr[3];
+            const float* ptr = mat.ptr<float>(i);
+            float cx = mat.at<float>(i, 0), cy = mat.at<float>(i, 1), width = mat.at<float>(i, 2), height = mat.at<float>(i, 3);
             // 如果bounding box的面积小于2500，即使该物体是动态的，也不进行处理
-            if (width * height < 3600) continue;
-            int class_id = std::max_element(ptr + 4, ptr + 4 + num_classes) - (ptr + 4);
-            float class_score = ptr[4 + class_id];
-            
-            if (class_score < conf_thresh_) continue;
-            float score_sigmoid = sigmoid(class_score);
+            if (width * height < 3000) continue;
+            // 第4维开始是类别得分
+            int class_id = std::max_element(ptr+4, ptr+4+num_classes) - (ptr+4);
+            float class_score = mat.at<float>(i, 4 + class_id);
+            float threshold = conf_thresh_;
+            if(class_id == 0)
+                threshold = 0.35;
+            if (class_score < threshold) continue;
+            float score_object = class_score;  // 使用sigmoid而不是softmax
     
             // 掩膜系数 (最后32维)
             std::vector<float> mask_coeffs(ptr + 4 + num_classes, ptr + 4 + num_classes + mask_dim);
@@ -114,12 +131,13 @@ namespace ORB_SLAM2
             SegResult res;
             res.bbox = cv::Rect_<float>(x, y, width, height);
             res.class_id = class_id;
-            res.confidence = score_sigmoid;
+            res.confidence = score_object;
             res.mask_coeffs = std::move(mask_coeffs);
             res.class_name = coco_classes_[class_id];
             this->detections_.push_back(std::move(res));
         }
     }
+    
     
     void YoloSeg::apply_yolo_style_nms(float iou_threshold, 
                                        float conf_threshold) {
@@ -347,7 +365,6 @@ namespace ORB_SLAM2
     float YoloSeg::sigmoid(float x){
         return 1.f / (1.f + std::exp(-x));
     }
-
     void YoloSeg::DrawSegmentation(cv::Mat& image) {
         std::vector<SegResult> current_detections;
         {
